@@ -1,0 +1,1 @@
+from QrClient.serializers.otp import QrCodeSerializer
