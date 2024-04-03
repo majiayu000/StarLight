@@ -24,10 +24,51 @@ class UserCf:
         target_movies = self.frame[self.frame["UserId"] == target_user_id]["MovieID"]
         other_users_id = [i for i in set(self.frame["UserId"]) if i != target_user_id]
         other_movies = [
-            self.frame[self.frame["UserId"]] == i["MovieID"] for i in other_user_id
+            self.frame[self.frame["UserId"]] == i["MovieID"] for i in other_users_id
         ]
 
         sim_list = [self._consine_sim(target_movies, movies) for movies in other_movies]
         sim_list = sorted(
             zip(other_users_id, sim_list), key=lambda x: x[1], reverse=True
         )
+        return sim_list[:top_n]
+
+    def _get_candidates_items(self, target_user_id):
+        target_user_movies = set(
+            self.frame[self.frame["UserId"] == target_user_id]["MovieID"]
+        )
+        other_user_movies = set(
+            self.frame[self.frame["UserID"] != target_user_id]["MovieID"]
+        )
+
+        candidates_movies = list(target_user_movies ^ other_user_movies)
+        return candidates_movies
+
+    def _get_top_n_items(self, top_n_users, candidates_movies, top_n):
+        top_n_user_data = [
+            self.frame[self.frame["UserID"] == k] for k, _ in top_n_users
+        ]
+        interest_list = []
+        for movie_id in candidates_movies:
+            tmp = []
+            for user_data in top_n_user_data:
+                if movie_id in user_data["MovieID"].values:
+                    tmp.append(
+                        user_data[user_data["MovieID"] == movie_id]["Rating"].values[0]
+                        / 5
+                    )
+                else:
+                    tmp.append(0)
+
+            interest = sum(
+                [top_n_users[i][i] * tmp[i] for i in range(len(top_n_users))]
+            )
+            interest_list.append(movie_id, interest)
+        interest_list = sorted(interest_list, key=lambda x: x[1], reverse=True)
+        return interest_list[:top_n]
+
+    def calculate(self, target_user_id, top_n=10):
+        top_n_users = self._get_top_n_users(target_user_id, top_n)
+        candidates_movies = self._get_candidates_items(target_user_id)
+        top_n_movies = self._get_top_n_items(top_n_users, candidates_movies, top_n)
+        return top_n_movies
