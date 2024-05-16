@@ -1,4 +1,6 @@
 import { useState, useRef } from "react";
+import "./index.css"
+
 
 const mimeType = "audio/webm";
 
@@ -13,6 +15,7 @@ const AudioRecorder = () => {
   const [audio, setAudio] = useState<string | null>(null);
 
   const getMicrophonePermission = async () => {
+    console.log("start get permission")
     if ("MediaRecorder" in window) {
       try {
         const streamData = await navigator.mediaDevices.getUserMedia({
@@ -36,9 +39,21 @@ const AudioRecorder = () => {
   };
 
   const startRecording = async () => {
+    const streamData = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: false,
+    });
+
+    setPermission(true);
+    setStream(streamData);
     setRecordingStatus("recording");
+
+    console.log("start")
+
+
     //create new Media recorder instance using the stream
     if (stream) {
+      console.log("start has stream")
       const media = new MediaRecorder(stream);
       //set the MediaRecorder instance to the mediaRecorder ref
       mediaRecorder.current = media;
@@ -51,6 +66,11 @@ const AudioRecorder = () => {
         localAudioChunks.push(event.data);
       };
       setAudioChunks(localAudioChunks);
+
+      // stream.getTracks().forEach(function (track) {
+      //   console.log("stop!!")
+      //   track.stop();
+      // });
     }
 
   };
@@ -60,13 +80,21 @@ const AudioRecorder = () => {
     //stops the recording instance
     if (mediaRecorder.current) {
       mediaRecorder.current.stop();
+      console.log("start stop")
       mediaRecorder.current.onstop = () => {
+        console.log("on stop")
         //creates a blob file from the audiochunks data
         const audioBlob = new Blob(audioChunks, { type: mimeType });
         //creates a playable URL from the blob file.
         const audioUrl = URL.createObjectURL(audioBlob);
         setAudio(audioUrl);
         setAudioChunks([]);
+        if (stream) {
+          stream.getTracks()[0].stop();
+          setStream(null);
+        }
+        setPermission(false)
+
       }
 
     };
@@ -82,7 +110,7 @@ const AudioRecorder = () => {
               Get Microphone
             </button>
           ) : null}
-          {permission && recordingStatus === "inactive" ? (
+          {recordingStatus === "inactive" ? (
             <button onClick={startRecording} type="button">
               Start Recording
             </button>
