@@ -34,6 +34,11 @@ class Corpus:
 
     @classmethod
     def save(cls):
+        with open(cls.items_dict_path, "wb") as f:
+            pickle.dump(cls.item_dicts, f)
+
+    @classmethod
+    def load(cls):
         with open(cls.items_dict_path, "rb") as f:
             items_dict = pickle.load(f)
         return items_dict
@@ -45,7 +50,7 @@ class LFM:
         self.iter_count = 5
         self.lr = 0.02
         self.lam = 0.01
-        self._init_mode()
+        self._init_model()
 
     def _init_model(self):
         file_path = "data/rating.csv"
@@ -107,3 +112,7 @@ class LFM:
     def save(self):
         self.p.to_csv("data/p.csv", index=False)
         self.q.to_csv("data/q.csv", index=False)
+
+    def load(self):
+        self.p = pd.read_csv("data/p.csv")
+        self.q = pd.read_csv("data/q.csv")
