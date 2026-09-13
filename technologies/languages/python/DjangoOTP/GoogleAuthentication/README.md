@@ -128,7 +128,8 @@ Current routes (see `QrAuth/QrClient/urls.py`):
 - `GET /qrClient/api/v1/qrcode/save` — authenticated; lists the caller's devices
   (raw TOTP `key` is omitted from responses).
 - `POST /qrClient/api/v1/qrcode/save` — authenticated; confirms enrollment with
-  pending session key (or `key`) plus verified `token`. Optional `name` must be a
+  the pending session key from a prior QR request plus verified `token`.
+  Client-supplied `key` values are rejected. Optional `name` must be a
   non-empty string ≤ 64 characters (`null` is rejected with 400).
 
 Example with Basic auth:

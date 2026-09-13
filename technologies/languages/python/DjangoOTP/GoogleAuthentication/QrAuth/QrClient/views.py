@@ -276,29 +276,22 @@ class QRCreateListView(generics.ListCreateAPIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        session_key, binding_error = get_pending_totp_key_for_user(request)
+        key, binding_error = get_pending_totp_key_for_user(request)
         if binding_error is not None:
             return binding_error
-
-        key = session_key
+        # Never accept a client-chosen secret: entropy cannot be proven from
+        # length/hex syntax alone (e.g. "0"*40). Enrollment must use the
+        # server-generated pending session key from a prior QR request.
         if not key:
-            client_key = request.data.get("key")
-            if client_key is None:
-                return Response(
-                    {"detail": "Pending key and token are required to enroll."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            if not is_valid_totp_key(str(client_key)):
-                return Response(
-                    {
-                        "detail": (
-                            f"key must be a {TOTP_KEY_HEX_LENGTH}-character hex string "
-                            f"({TOTP_KEY_HEX_LENGTH // 2} bytes)."
-                        )
-                    },
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            key = str(client_key)
+            return Response(
+                {
+                    "detail": (
+                        "No pending TOTP enrollment. Request a QR code first; "
+                        "client-supplied keys are not accepted."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         token = request.data.get("token")
         if token is None:

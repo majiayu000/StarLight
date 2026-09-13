@@ -224,17 +224,31 @@ class QrClientSecurityTests(TestCase):
         self.assertFalse(TOTPDevice.objects.filter(user=self.other).exists())
         self.assertFalse(TOTPDevice.objects.filter(user=self.owner).exists())
 
-    def test_weak_client_supplied_key_is_rejected(self):
+    def test_client_supplied_key_fallback_is_rejected(self):
+        """Even a well-formed 40-char hex key is rejected without a pending session."""
         self.client.force_login(self.owner)
-        weak_key = "00"
-        token = self._token_for_key(weak_key.zfill(40)[-40:])  # unused; key fails first
+        client_key = "0" * 40
+        token = self._token_for_key(client_key)
         response = self.client.post(
             "/qrClient/api/v1/qrcode/save",
-            data={"key": weak_key, "token": "123456"},
+            data={"key": client_key, "token": token},
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn("40-character", response.json()["detail"])
+        detail = response.json()["detail"]
+        self.assertIn("pending", detail.lower())
+        self.assertIn("client-supplied", detail.lower())
+        self.assertFalse(TOTPDevice.objects.filter(user=self.owner).exists())
+
+    def test_random_looking_client_key_without_pending_is_rejected(self):
+        self.client.force_login(self.owner)
+        client_key = random_hex(20)
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/save",
+            data={"key": client_key, "token": self._token_for_key(client_key)},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
         self.assertFalse(TOTPDevice.objects.filter(user=self.owner).exists())
 
     def test_enrollment_token_updates_last_t(self):
