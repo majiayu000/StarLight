@@ -1,5 +1,6 @@
 import logging
-from typing import Callable, Optional, Type
+import uuid
+from typing import Callable, Mapping, MutableMapping, Optional, Type
 
 from django.http import HttpRequest, HttpResponse
 from django.utils.deprecation import MiddlewareMixin
@@ -8,45 +9,102 @@ from logClient.common import Log
 
 Log.log("requestLog.log")
 
+# Headers that must never appear in logs with their real values.
+SENSITIVE_HEADERS = frozenset(
+    {
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+        "x-api-key",
+        "x-auth-token",
+        "x-csrftoken",
+        "x-csrf-token",
+    }
+)
+
+REDACTED = "[REDACTED]"
+
+# Reserved for a future explicit body-field allowlist. Bodies are omitted by default.
+BODY_FIELD_ALLOWLIST: frozenset[str] = frozenset()
+
+
+def redact_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    """Return a copy of headers with sensitive values replaced."""
+    redacted: dict[str, str] = {}
+    for name, value in headers.items():
+        if name.lower() in SENSITIVE_HEADERS:
+            redacted[name] = REDACTED
+        else:
+            redacted[name] = value
+    return redacted
+
+
+def _request_id(request: HttpRequest) -> str:
+    existing = getattr(request, "request_id", None)
+    if existing:
+        return str(existing)
+
+    header_id = request.headers.get("X-Request-Id") or request.META.get(
+        "HTTP_X_REQUEST_ID"
+    )
+    if header_id:
+        request.request_id = header_id
+        return str(header_id)
+
+    generated = uuid.uuid4().hex
+    request.request_id = generated
+    return generated
+
+
+def build_safe_request_log(
+    request: HttpRequest,
+    *,
+    status: Optional[int] = None,
+    include_headers: bool = False,
+) -> dict:
+    """
+    Safe default log shape: method, path, request id, and status when available.
+
+    Does not include raw request bodies. Headers are omitted by default; when
+    explicitly requested they are redacted via redact_headers().
+    """
+    data: MutableMapping[str, object] = {
+        "method": request.method,
+        "path": request.path,
+        "request_id": _request_id(request),
+    }
+    if status is not None:
+        data["status"] = status
+    if include_headers:
+        data["headers"] = redact_headers(dict(request.headers))
+    # Raw request bodies are never logged by default.
+    return dict(data)
+
+
+def _log_request(request: HttpRequest, *, status: Optional[int] = None) -> None:
+    logging.info(build_safe_request_log(request, status=status))
+
 
 # A middleware can be written as a function
 def simple_middleware(get_response):
     # One-time configuration and initialization.
 
     def middleware(request):
-        # Code to be executed for each request before
-        # the view (and later middleware) are called.
-
-        request_data = {
-            "method": request.method,
-            "path": request.path,
-            "headers": dict(request.headers),
-            "body": request.body.decode("utf-8"),
-        }
-        # Todo: choose the parameters we need in headers
-        logging.info(request_data)
-
         response = get_response(request)
-
-        # Code to be executed for each request/response after
-        # the view is called.
-
+        _log_request(request, status=response.status_code)
         return response
 
     return middleware
 
 
-# It can be written as a class whose instances are callable, like this:
-class RequestLoggingMiddleware(MiddlewareMixin):
-    def process_request(self, request: HttpRequest) -> None:
-        request_data = {
-            "method": request.method,
-            "path": request.path,
-            "headers": dict(request.headers),
-            "body": request.body.decode("utf-8"),
-        }
-        # Todo: choose the parameters we need in headers
-        logging.info(request_data)
+# MiddlewareMixin-style class (educational). Prefer RequestLoggingMiddleware below.
+class RequestLoggingMixinMiddleware(MiddlewareMixin):
+    def process_response(
+        self, request: HttpRequest, response: HttpResponse
+    ) -> HttpResponse:
+        _log_request(request, status=response.status_code)
+        return response
 
     def process_exception(
         self, request: HttpRequest, exception: Type[Exception]
@@ -65,22 +123,6 @@ class RequestLoggingMiddleware:
         self.get_response = get_response
 
     def __call__(self, request: HttpRequest) -> HttpResponse:
-        # Code to be executed for each request before
-        # the view (and later middleware) are called.
-
-        request_data = {
-            "method": request.method,
-            "path": request.path,
-            "headers": dict(request.headers),
-            "body": request.body.decode("utf-8"),
-        }
-        logging.info(request_data)
-
         response = self.get_response(request)
-
-        # Code to be executed for each request/response after
-        # the view is called.
-
-        # logger.info(f'Response: {response.status_code}')
-
+        _log_request(request, status=response.status_code)
         return response
