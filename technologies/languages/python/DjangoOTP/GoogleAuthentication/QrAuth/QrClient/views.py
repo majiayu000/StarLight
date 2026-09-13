@@ -40,10 +40,30 @@ class SvgXmlRenderer(BaseRenderer):
         return str(data).encode(self.charset or "utf-8")
 
 
-def resolve_device_name(request_data):
-    """Return a validated device name or an error Response."""
+def allocate_default_device_name(user):
+    """
+    Return an unused default-style name for this user.
+
+    django-otp enforces uniqueness on (user, name); the first enrollment can
+    use ``default``, and later enrollments get ``default-2``, ``default-3``, …
+    """
+    existing = set(
+        TOTPDevice.objects.filter(user=user).values_list("name", flat=True)
+    )
+    if "default" not in existing:
+        return "default"
+    suffix = 2
+    while True:
+        candidate = f"default-{suffix}"
+        if candidate not in existing:
+            return candidate
+        suffix += 1
+
+
+def resolve_device_name(user, request_data):
+    """Return a validated, unused device name or an error Response."""
     if "name" not in request_data:
-        return "default", None
+        return allocate_default_device_name(user), None
 
     name = request_data.get("name")
     if not isinstance(name, str) or not name.strip():
@@ -58,6 +78,11 @@ def resolve_device_name(request_data):
                     f"name must be at most {TOTP_DEVICE_NAME_MAX_LENGTH} characters."
                 )
             },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    if TOTPDevice.objects.filter(user=user, name=name).exists():
+        return None, Response(
+            {"detail": "A device with this name already exists."},
             status=status.HTTP_400_BAD_REQUEST,
         )
     return name, None
@@ -243,8 +268,12 @@ class QRSetup(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        name, name_error = resolve_device_name(request.user, request.data)
+        if name_error is not None:
+            return name_error
+
         device, error = confirm_totp_device(
-            user=request.user, key=key, name="default", token=token
+            user=request.user, key=key, name=name, token=token
         )
         if error is not None:
             return error
@@ -300,7 +329,7 @@ class QRCreateListView(generics.ListCreateAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        name, name_error = resolve_device_name(request.data)
+        name, name_error = resolve_device_name(request.user, request.data)
         if name_error is not None:
             return name_error
 

@@ -204,6 +204,58 @@ class QrClientSecurityTests(TestCase):
             TOTPDevice.objects.filter(user=self.owner, confirmed=True).count(), 2
         )
 
+    def test_qrsetup_additional_enrollment_gets_unique_default_name(self):
+        """Second QRSetup enroll must not collide on hardcoded name='default'."""
+        existing_key = random_hex(20)
+        TOTPDevice.objects.create(
+            user=self.owner,
+            key=existing_key,
+            name="default",
+            confirmed=True,
+        )
+        self.client.force_login(self.owner)
+        new_key = self._store_pending(self.owner)
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/list/",
+            data={
+                "token": self._token_for_key(new_key),
+                "existing_otp": self._token_for_key(existing_key),
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["name"], "default-2")
+        self.assertEqual(
+            TOTPDevice.objects.filter(user=self.owner, confirmed=True).count(), 2
+        )
+        self.assertTrue(
+            TOTPDevice.objects.filter(
+                user=self.owner, name="default-2", confirmed=True
+            ).exists()
+        )
+
+    def test_duplicate_explicit_device_name_is_rejected(self):
+        existing_key = random_hex(20)
+        TOTPDevice.objects.create(
+            user=self.owner,
+            key=existing_key,
+            name="phone",
+            confirmed=True,
+        )
+        self.client.force_login(self.owner)
+        new_key = self._store_pending(self.owner)
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/save",
+            data={
+                "token": self._token_for_key(new_key),
+                "existing_otp": self._token_for_key(existing_key),
+                "name": "phone",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(TOTPDevice.objects.filter(user=self.owner).count(), 1)
+
     def test_pending_secret_bound_to_requesting_user(self):
         self.client.force_login(self.owner)
         key = self._store_pending(self.owner)

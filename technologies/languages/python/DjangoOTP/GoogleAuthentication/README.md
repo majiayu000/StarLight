@@ -124,15 +124,31 @@ Current routes (see `QrAuth/QrClient/urls.py`):
   `Accept: image/svg+xml`.
 - `POST /qrClient/api/v1/qrcode/list/` — authenticated; body `{"token": "<6-digit TOTP>"}`
   confirms enrollment for `request.user` after verifying the token. Does **not**
-  mint JWTs and does **not** accept an arbitrary `user` field.
+  mint JWTs and does **not** accept an arbitrary `user` field. Optional `name`
+  must be a non-empty string ≤ 64 characters; when omitted, the server assigns
+  an unused default (`default`, then `default-2`, …).
 - `GET /qrClient/api/v1/qrcode/save` — authenticated; lists the caller's devices
   (raw TOTP `key` is omitted from responses).
 - `POST /qrClient/api/v1/qrcode/save` — authenticated; confirms enrollment with
   the pending session key from a prior QR request plus verified `token`.
   Client-supplied `key` values are rejected. Optional `name` must be a
-  non-empty string ≤ 64 characters (`null` is rejected with 400).
+  non-empty string ≤ 64 characters (`null` is rejected with 400); when omitted,
+  the server assigns an unused default name as above.
 
-Example with Basic auth:
+**Initial enrollment** (no confirmed device yet): password/Basic auth plus the
+new device `token` is enough.
+
+**Additional / backup enrollment** (account already has a confirmed TOTP
+device): password-only auth is not enough. Callers must also prove possession of
+an existing factor via one of:
+
+- JSON body field `existing_otp` with a current code from a confirmed device, or
+- HTTP header `X-OTP` with that same code, or
+- an OTP-verified session (`request.user.is_verified()`).
+
+Without that proof, additional enrollment returns 403.
+
+Example — initial enrollment with Basic auth:
 
 ```bash
 # 1) Fetch QR (stores pending key server-side)
@@ -141,11 +157,34 @@ curl -u owner:owner-pass-123 \
   http://127.0.0.1:8000/qrClient/api/v1/qrcode/list/ \
   -o enroll.svg -c cookies.txt
 
-# 2) Confirm with the current authenticator code (reuse session cookie)
+# 2) Confirm with the new authenticator code (reuse session cookie)
 curl -u owner:owner-pass-123 -b cookies.txt \
   -H 'Content-Type: application/json' \
   -d '{"token":"123456"}' \
   http://127.0.0.1:8000/qrClient/api/v1/qrcode/list/
+```
+
+Example — enroll a backup device (existing MFA required):
+
+```bash
+# 1) Fetch a new QR for the backup factor
+curl -u owner:owner-pass-123 \
+  -H 'Accept: image/svg+xml' \
+  http://127.0.0.1:8000/qrClient/api/v1/qrcode/list/ \
+  -o backup.svg -c cookies.txt
+
+# 2a) Confirm with new token + existing_otp in the body
+curl -u owner:owner-pass-123 -b cookies.txt \
+  -H 'Content-Type: application/json' \
+  -d '{"token":"654321","existing_otp":"123456","name":"backup"}' \
+  http://127.0.0.1:8000/qrClient/api/v1/qrcode/list/
+
+# 2b) Or pass the existing code via X-OTP instead of existing_otp
+curl -u owner:owner-pass-123 -b cookies.txt \
+  -H 'Content-Type: application/json' \
+  -H 'X-OTP: 123456' \
+  -d '{"token":"654321","name":"backup"}' \
+  http://127.0.0.1:8000/qrClient/api/v1/qrcode/save
 ```
 
 Unauthenticated callers receive 401/403. Submitting only `user` + `key` without
