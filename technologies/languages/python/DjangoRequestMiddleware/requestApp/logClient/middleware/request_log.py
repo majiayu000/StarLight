@@ -109,12 +109,16 @@ class RequestLoggingMixinMiddleware(MiddlewareMixin):
     def process_exception(
         self, request: HttpRequest, exception: Exception
     ) -> Optional[HttpResponse]:
-        # Log and return None so Django continues normal exception/500 handling.
-        # Returning the exception object would break response processing.
+        # Log only sanitized request metadata and the exception type.
+        # Exception messages and tracebacks may contain secrets (passwords,
+        # tokens) and must not be written to application logs.
+        # Return None so Django continues normal exception/500 handling.
         logging.error(
-            "Unhandled Exception: %s",
-            exception,
-            exc_info=exception,
+            {
+                **build_safe_request_log(request),
+                "event": "unhandled_exception",
+                "exception_type": type(exception).__name__,
+            }
         )
         return None
 

@@ -163,6 +163,29 @@ class MiddlewareLoggingTests(SimpleTestCase):
         result = mw.process_exception(request, RuntimeError("boom"))
         self.assertIsNone(result)
 
+    def test_mixin_process_exception_does_not_log_secret_messages(self):
+        self.handler.setLevel(logging.ERROR)
+        logging.getLogger().setLevel(logging.ERROR)
+        mw = RequestLoggingMixinMiddleware(MagicMock())
+        request = self._sensitive_request()
+        secret_exc = ValueError(f"bad password={SECRET_MARKER} auth=Bearer {SECRET_MARKER}")
+        result = mw.process_exception(request, secret_exc)
+        self.assertIsNone(result)
+
+        joined = "\n".join(self.handler.records)
+        self.assertTrue(self.handler.records, "expected at least one log record")
+        self.assertIn("ValueError", joined)
+        self.assertIn("unhandled_exception", joined)
+        self.assertIn("/api/auth/", joined)
+        self.assertNotIn(SECRET_MARKER, joined)
+        self.assertNotIn("password=", joined)
+        self.assertNotIn("Bearer ", joined)
+        self.assertNotIn(COOKIE_MARKER, joined)
+        self.assertNotIn(BODY_MARKER, joined)
+        # Message text and traceback must not appear.
+        self.assertNotIn("bad password", joined)
+        self.assertNotIn("Traceback", joined)
+
 
 @override_settings(
     MIDDLEWARE=[
