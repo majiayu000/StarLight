@@ -1,12 +1,14 @@
 import json
 import os
+import secrets
 import asyncio
 from typing import AsyncGenerator
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
@@ -14,12 +16,39 @@ from dotenv import load_dotenv
 load_dotenv()
 
 API_KEY = os.environ["OPENAI_API_KEY_"]
+# Distinct from OPENAI_API_KEY_: callers must present this token to use the proxy.
+PROXY_AUTH_TOKEN = os.environ["PROXY_AUTH_TOKEN"]
 BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
 TIMEOUT = 40
 
 client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 app = FastAPI()
+
+# auto_error=False so we return a uniform 401 (and never echo credential material).
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def _proxy_tokens_match(provided: str, expected: str) -> bool:
+    if not expected or len(provided) != len(expected):
+        return False
+    return secrets.compare_digest(provided, expected)
+
+
+async def require_proxy_auth(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
+) -> None:
+    """Reject unauthenticated callers before any upstream OpenAI usage."""
+    if (
+        credentials is None
+        or credentials.scheme.lower() != "bearer"
+        or not _proxy_tokens_match(credentials.credentials, PROXY_AUTH_TOKEN)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 
@@ -158,6 +187,7 @@ async def resp_generator(message: str) -> AsyncGenerator[str, None]:
 @app.post("/")
 async def message(
     request: RequestMessage,
+    _: None = Depends(require_proxy_auth),
 ):
     return StreamingResponse(
         resp_generator(request.message),
