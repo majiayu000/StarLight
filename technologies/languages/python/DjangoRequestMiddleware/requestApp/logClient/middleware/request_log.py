@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Callable, Mapping, MutableMapping, Optional, Type
+from typing import Callable, Mapping, MutableMapping, Optional
 
 from django.http import HttpRequest, HttpResponse
 from django.utils.deprecation import MiddlewareMixin
@@ -107,13 +107,16 @@ class RequestLoggingMixinMiddleware(MiddlewareMixin):
         return response
 
     def process_exception(
-        self, request: HttpRequest, exception: Type[Exception]
-    ) -> Optional[Type[Exception]]:
-        try:
-            raise exception
-        except Exception as e:
-            logging.exception("Unhandled Exception: " + str(e))
-        return exception
+        self, request: HttpRequest, exception: Exception
+    ) -> Optional[HttpResponse]:
+        # Log and return None so Django continues normal exception/500 handling.
+        # Returning the exception object would break response processing.
+        logging.error(
+            "Unhandled Exception: %s",
+            exception,
+            exc_info=exception,
+        )
+        return None
 
 
 # Given MiddlewareMixin has been deprecated,

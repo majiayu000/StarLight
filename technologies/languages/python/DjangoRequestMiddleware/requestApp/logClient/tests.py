@@ -156,6 +156,13 @@ class MiddlewareLoggingTests(SimpleTestCase):
         mw.process_response(request, response)
         self._assert_safe_logs()
 
+    def test_mixin_process_exception_returns_none(self):
+        get_response = MagicMock(side_effect=RuntimeError("boom"))
+        mw = RequestLoggingMixinMiddleware(get_response)
+        request = self.factory.get("/fail/")
+        result = mw.process_exception(request, RuntimeError("boom"))
+        self.assertIsNone(result)
+
 
 @override_settings(
     MIDDLEWARE=[
