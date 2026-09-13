@@ -124,3 +124,63 @@ class QrClientSecurityTests(TestCase):
         self.assertTrue(
             TOTPDevice.objects.filter(user=self.owner, confirmed=True).exists()
         )
+
+
+    def test_basic_auth_allows_ordinary_user_to_request_qr(self):
+        import base64
+
+        credentials = base64.b64encode(b"owner:owner-pass-123").decode("ascii")
+        response = self.client.get(
+            "/qrClient/api/v1/qrcode/list/",
+            HTTP_AUTHORIZATION=f"Basic {credentials}",
+            HTTP_ACCEPT="image/svg+xml",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("image/svg+xml", response["Content-Type"])
+        self.assertTrue(response.content)
+
+    def test_null_device_name_is_rejected_without_integrity_error(self):
+        self.client.force_login(self.owner)
+        key = random_hex(20)
+        session = self.client.session
+        session[PENDING_TOTP_SESSION_KEY] = key
+        session.save()
+
+        token = totp(
+            unhexlify(key.encode("ascii")),
+            step=30,
+            digits=totp_digits(),
+        )
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/save",
+            data={
+                "token": str(token).zfill(totp_digits()),
+                "name": None,
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(TOTPDevice.objects.filter(user=self.owner).exists())
+
+    def test_overlong_device_name_is_rejected(self):
+        self.client.force_login(self.owner)
+        key = random_hex(20)
+        session = self.client.session
+        session[PENDING_TOTP_SESSION_KEY] = key
+        session.save()
+
+        token = totp(
+            unhexlify(key.encode("ascii")),
+            step=30,
+            digits=totp_digits(),
+        )
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/save",
+            data={
+                "token": str(token).zfill(totp_digits()),
+                "name": "x" * 65,
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(TOTPDevice.objects.filter(user=self.owner).exists())
