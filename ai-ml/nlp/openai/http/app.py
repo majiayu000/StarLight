@@ -30,9 +30,19 @@ _bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def _proxy_tokens_match(provided: str, expected: str) -> bool:
-    if not expected or len(provided) != len(expected):
+    """Constant-time token compare that never raises on non-ASCII input.
+
+    ``secrets.compare_digest`` on ``str`` only supports ASCII and raises
+    ``TypeError`` otherwise, which would turn auth failures into 500s.
+    Comparing UTF-8 bytes keeps a uniform False (→ 401) for any credential.
+    """
+    if not expected:
         return False
-    return secrets.compare_digest(provided, expected)
+    provided_b = provided.encode("utf-8")
+    expected_b = expected.encode("utf-8")
+    if len(provided_b) != len(expected_b):
+        return False
+    return secrets.compare_digest(provided_b, expected_b)
 
 
 async def require_proxy_auth(
