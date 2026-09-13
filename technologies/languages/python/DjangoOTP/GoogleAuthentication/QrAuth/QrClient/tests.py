@@ -1,3 +1,4 @@
+import base64
 from binascii import unhexlify
 
 from django.contrib.auth.models import User
@@ -5,7 +6,10 @@ from django.test import Client, TestCase
 from django_otp.oath import totp
 from django_otp.plugins.otp_totp.models import TOTPDevice
 from django_otp.util import random_hex
-from QrClient.views import PENDING_TOTP_SESSION_KEY
+from QrClient.views import (
+    PENDING_TOTP_SESSION_KEY,
+    PENDING_TOTP_USER_SESSION_KEY,
+)
 from two_factor.utils import totp_digits
 
 
@@ -18,6 +22,19 @@ class QrClientSecurityTests(TestCase):
             username="other", password="other-pass-123"
         )
         self.client = Client()
+
+    def _store_pending(self, user, key=None):
+        key = key or random_hex(20)
+        session = self.client.session
+        session[PENDING_TOTP_SESSION_KEY] = key
+        session[PENDING_TOTP_USER_SESSION_KEY] = user.pk
+        session.save()
+        return key
+
+    def _token_for_key(self, key):
+        return str(
+            totp(unhexlify(key.encode("ascii")), step=30, digits=totp_digits())
+        ).zfill(totp_digits())
 
     def test_unauthenticated_list_get_is_rejected(self):
         response = self.client.get("/qrClient/api/v1/qrcode/list/")
@@ -45,19 +62,11 @@ class QrClientSecurityTests(TestCase):
 
     def test_authenticated_user_cannot_create_device_for_another_username(self):
         self.client.force_login(self.owner)
-        key = random_hex(20)
-        session = self.client.session
-        session[PENDING_TOTP_SESSION_KEY] = key
-        session.save()
-
-        token = totp(
-            unhexlify(key.encode("ascii")),
-            step=30,
-            digits=totp_digits(),
-        )
+        key = self._store_pending(self.owner)
+        token = self._token_for_key(key)
         response = self.client.post(
             "/qrClient/api/v1/qrcode/save",
-            data={"user": "other", "token": str(token).zfill(totp_digits())},
+            data={"user": "other", "token": token},
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 403)
@@ -101,19 +110,11 @@ class QrClientSecurityTests(TestCase):
 
     def test_qrsetup_post_verifies_totp_without_nameerror(self):
         self.client.force_login(self.owner)
-        key = random_hex(20)
-        session = self.client.session
-        session[PENDING_TOTP_SESSION_KEY] = key
-        session.save()
-
-        token = totp(
-            unhexlify(key.encode("ascii")),
-            step=30,
-            digits=totp_digits(),
-        )
+        key = self._store_pending(self.owner)
+        token = self._token_for_key(key)
         response = self.client.post(
             "/qrClient/api/v1/qrcode/list/",
-            data={"token": str(token).zfill(totp_digits())},
+            data={"token": token},
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 201)
@@ -121,14 +122,10 @@ class QrClientSecurityTests(TestCase):
         self.assertNotIn("key", payload)
         self.assertNotIn("api_token", payload)
         self.assertNotIn("refreshToken", payload)
-        self.assertTrue(
-            TOTPDevice.objects.filter(user=self.owner, confirmed=True).exists()
-        )
-
+        device = TOTPDevice.objects.get(user=self.owner, confirmed=True)
+        self.assertGreaterEqual(device.last_t, 0)
 
     def test_basic_auth_allows_ordinary_user_to_request_qr(self):
-        import base64
-
         credentials = base64.b64encode(b"owner:owner-pass-123").decode("ascii")
         response = self.client.get(
             "/qrClient/api/v1/qrcode/list/",
@@ -141,22 +138,11 @@ class QrClientSecurityTests(TestCase):
 
     def test_null_device_name_is_rejected_without_integrity_error(self):
         self.client.force_login(self.owner)
-        key = random_hex(20)
-        session = self.client.session
-        session[PENDING_TOTP_SESSION_KEY] = key
-        session.save()
-
-        token = totp(
-            unhexlify(key.encode("ascii")),
-            step=30,
-            digits=totp_digits(),
-        )
+        key = self._store_pending(self.owner)
+        token = self._token_for_key(key)
         response = self.client.post(
             "/qrClient/api/v1/qrcode/save",
-            data={
-                "token": str(token).zfill(totp_digits()),
-                "name": None,
-            },
+            data={"token": token, "name": None},
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
@@ -164,23 +150,112 @@ class QrClientSecurityTests(TestCase):
 
     def test_overlong_device_name_is_rejected(self):
         self.client.force_login(self.owner)
-        key = random_hex(20)
-        session = self.client.session
-        session[PENDING_TOTP_SESSION_KEY] = key
-        session.save()
-
-        token = totp(
-            unhexlify(key.encode("ascii")),
-            step=30,
-            digits=totp_digits(),
-        )
+        key = self._store_pending(self.owner)
+        token = self._token_for_key(key)
         response = self.client.post(
             "/qrClient/api/v1/qrcode/save",
-            data={
-                "token": str(token).zfill(totp_digits()),
-                "name": "x" * 65,
-            },
+            data={"token": token, "name": "x" * 65},
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
         self.assertFalse(TOTPDevice.objects.filter(user=self.owner).exists())
+
+    def test_password_only_cannot_enroll_additional_device(self):
+        existing_key = random_hex(20)
+        TOTPDevice.objects.create(
+            user=self.owner,
+            key=existing_key,
+            name="primary",
+            confirmed=True,
+        )
+        credentials = base64.b64encode(b"owner:owner-pass-123").decode("ascii")
+        new_key = random_hex(20)
+        token = self._token_for_key(new_key)
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/save",
+            data={"key": new_key, "token": token},
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Basic {credentials}",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(TOTPDevice.objects.filter(user=self.owner).count(), 1)
+
+    def test_existing_otp_allows_additional_enrollment(self):
+        existing_key = random_hex(20)
+        TOTPDevice.objects.create(
+            user=self.owner,
+            key=existing_key,
+            name="primary",
+            confirmed=True,
+        )
+        self.client.force_login(self.owner)
+        new_key = self._store_pending(self.owner)
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/save",
+            data={
+                "token": self._token_for_key(new_key),
+                "existing_otp": self._token_for_key(existing_key),
+                "name": "backup",
+            },
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(
+            TOTPDevice.objects.filter(user=self.owner, confirmed=True).count(), 2
+        )
+
+    def test_pending_secret_bound_to_requesting_user(self):
+        self.client.force_login(self.owner)
+        key = self._store_pending(self.owner)
+        self.client.logout()
+        self.client.force_login(self.other)
+        # Re-attach the same session pending values after login swap.
+        session = self.client.session
+        session[PENDING_TOTP_SESSION_KEY] = key
+        session[PENDING_TOTP_USER_SESSION_KEY] = self.owner.pk
+        session.save()
+
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/save",
+            data={"token": self._token_for_key(key)},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(TOTPDevice.objects.filter(user=self.other).exists())
+        self.assertFalse(TOTPDevice.objects.filter(user=self.owner).exists())
+
+    def test_weak_client_supplied_key_is_rejected(self):
+        self.client.force_login(self.owner)
+        weak_key = "00"
+        token = self._token_for_key(weak_key.zfill(40)[-40:])  # unused; key fails first
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/save",
+            data={"key": weak_key, "token": "123456"},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("40-character", response.json()["detail"])
+        self.assertFalse(TOTPDevice.objects.filter(user=self.owner).exists())
+
+    def test_enrollment_token_updates_last_t(self):
+        self.client.force_login(self.owner)
+        key = self._store_pending(self.owner)
+        token = self._token_for_key(key)
+        response = self.client.post(
+            "/qrClient/api/v1/qrcode/save",
+            data={"token": token},
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        device = TOTPDevice.objects.get(user=self.owner)
+        self.assertGreaterEqual(device.last_t, 0)
+        # Same token must not verify again (replay consumed via last_t).
+        self.assertFalse(device.verify_token(token))
+
+    def test_qr_get_rejects_json_accept(self):
+        self.client.force_login(self.owner)
+        response = self.client.get(
+            "/qrClient/api/v1/qrcode/list/",
+            HTTP_ACCEPT="application/json",
+        )
+        self.assertEqual(response.status_code, 406)
