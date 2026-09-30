@@ -2,7 +2,12 @@
 
 Always keep learning and coding.
 
-A repository for recording things or concept I learned.
+Personal programming and AI/ML learning notes, Jupyter notebooks, and small code examples.
+
+Browse [design patterns](fundamentals/design-patterns/),
+[programming languages](technologies/languages/),
+[databases](technologies/databases/), and [AI/ML](ai-ml/).
+This is a learning archive: examples have their own dependencies and are not one installable application.
 
 ## 🏗️ 新架构
 
